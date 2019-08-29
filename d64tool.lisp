@@ -163,14 +163,15 @@
 ;; TODO perhaps create a integer->bit-vector
 ;; TODO move this to some utility file some day
 (defun bit-vector->integer (bit-vector)
-  (loop for bit from 0 to (- (length test) 1) 
-        for power from (- (length test) 1) downto 0 sum
-                                                    (* (aref test bit) (expt 2 power))))
+  (loop for bit from 0 to (- (length bit-vector) 1) 
+        for power from (- (length bit-vector) 1) downto 0 sum
+                                                    (* (aref bit-vector bit) (expt 2 power))))
 
 ;; TODO have this support freeing up a block? Right now we only support when we wish to write to a track and thus decrease the currently available number of sectors in a track
 ;; TODO have an error check to ensure the sectors exists (e.g. track 1 only has 21 sectors therefore we should not be able to set track 22)
 (defun update-bam-entry (bam track sector)
-  (let* ((start (- 1 (* 4 track)))
+  (let* ((bytes-per-track 4)
+         (start (* bytes-per-track track))
          (sectors-0-7 (+ 1 start))
          (sectors-8-15 (+ 2 start))
          ;; This last byte needs to be dealt with in a special way since not there are a few bytes unused given the uneven number of tracks
@@ -179,19 +180,18 @@
     (decf (aref bam start))
     ;; 1 means block is available 0.  bit-field is an integer that represents 8 bits
     (labels ((turn-off-bit (bit-field bit)
-               (let ((bit-mask (make-array bit :element-type 'bit :initial-element 1)))
-                 (setf (aref bit-mask 0) 0)
+               (let ((bit-mask (make-array 8 :element-type 'bit :initial-element 1)))
+                 (setf (aref bit-mask bit) 0)
                  (logand (bit-vector->integer bit-mask) bit-field))))
       (cond ((and (>= sector 0)
                   (<= sector 7))
              (setf (aref bam sectors-0-7) (turn-off-bit (aref bam sectors-0-7) sector)))
-            ;; From this point we need to figure out which bit represents which sector
             ((and (>= sector 8)
                   (<= sector 15))
-             (setf (aref bam sectors-8-15) (turn-off-bit (aref bam sectors-8-15) (- 15 sector))))
+             (setf (aref bam sectors-8-15) (turn-off-bit (aref bam sectors-8-15) (- sector 8))))
             ((and (>= sector 16)
                   (<= sector 23))
-             (setf (aref bam sectors-16-23) (turn-off-bit (aref bam sectors-16-23) (- 23 sector))))))))
+             (setf (aref bam sectors-16-23) (turn-off-bit (aref bam sectors-16-23) (- sector 16))))))))
 
 ;; mainly used for debugging
 ;; TODO should try to generalize this one day to generate fixed sized byte table readings
@@ -211,7 +211,13 @@
 (defun write-to-disk (track sector disk data-to-write &key interleave))
 
 ;; TODO should accept the BAM and update the bam properly
-(defun write-file-to-disk (start-track start-sector data-to-write disk))
+;; TODO need to properly support file contents larger than 254 bytes aka interleaving several sectors properly
+(defun write-file-to-disk (start-track start-sector disk content-file)
+  (with-open-file (contents content-file :direction :input :element-type 'unsigned-byte)
+    (loop with byte-offset = (seek-to-track-sector start-track start-sector)
+          for byte = (read-byte contents 'nil 'nil) while byte do
+            (setf (aref disk byte-offset) byte)
+            (incf byte-offset))))
 
 ;; TODO should also accept the BAM to determine if the directory entry has
 (defun write-directory-entry (disk directory-entries)
@@ -228,7 +234,12 @@
   (let ((bam-track-sector-start (seek-to-track-sector 18 0)))
     (loop for byte across bam
           for disk-index from 0 to (- (length bam) 1) do
-          (setf (aref disk (+ bam-track-sector-start disk-index)) byte))))
+            (setf (aref disk (+ bam-track-sector-start disk-index)) byte))))
+
+(defun compile-disk (disk-name disk directories bam)
+  (write-directory-entry disk *directory-entries*)
+  (write-bam disk bam)
+  (save-disk-image disk-name disk))
 
 ;; TODO have this accept: a series of directory entries and write them accordingly,
 (defun save-disk-image (disk-image-name disk-contents)
