@@ -5,9 +5,9 @@
 (defconstant *total-tracks-in-standard-disk*
   35
   "The standard number of tracks of a d64 formatted disk according to http://unusedino.de/ec64/technical/formats/d64.html")
-(defconstant *sector-size-in-bytes*
+(defconstant *sector-size-in-bytes* 
   256
-  "Number of bytes in a sector according to ohttp://unusedino.de/ec64/technical/formats/d64.html")
+  "Number of bytes in a sector according to http://unusedino.de/ec64/technical/formats/d64.html")
 
 ;; TODO determine if this still needs to be a table or simply a function 
 (defun generate-sectors-per-track-table ()
@@ -68,7 +68,7 @@
             (rel-file-length-offset 22)
             (unused-block-offset 23)
             ;; file size is given in sectors low byte high byte order
-            (file-size-offset 24)
+            (file-size-offset 30)
             (new-entry (make-array 32 :element-type 'unsigned-byte :initial-element #x0)))
         
         ;; Technically the first two bytes should only be set if the directory spans multiple tracks (which is possible but unlikely) and is only filled out at the start of a directory track
@@ -112,7 +112,9 @@
         (setf (aref new-bam (+ 1 disk-fill-one)) #xa0)
         ;; I dont know what the disk id actually does
         (setf (aref new-bam disk-id-offset) #x0)
-        (setf (aref new-bam (+ 1 disk-id-offset)) #x0)
+        (setf (aref new-bam (+ 1 disk-id-offset)) #x1)
+        ;; Technically disk-id is 2 bytes but this random byte is "usually" a0
+        (setf (aref new-bam (+ 2 disk-id-offset)) #xa0)
         (setf (aref new-bam dos-type-offset) #x2a)
         
         (dotimes (i 16)
@@ -120,7 +122,7 @@
                                                           #xa0
                                                           (char-code (char-upcase (aref disk-name i))))))
 
-        (dotimes (i 3)
+        (dotimes (i 4)
           (setf (aref new-bam (+ i disk-fill-two)) #xa0))
         ;; We mark all items empty except for track 18 sectors one and two
         ;; refactor this to make it part of the sectors-per-track table we originally created
@@ -208,7 +210,7 @@
   (make-array *standard-disk-size* :element-type 'unsigned-byte :initial-element #x0))
 
 ;; TODO determine number of bytes and divide it among track/sectors as evenly as possible interleaving sectors of 10 (implementation note will need to check if at last sector of track if so need to move to next).
-(defun write-to-disk (track sector disk data-to-write &key interleave))
+ (defun write-to-disk (track sector disk data-to-write &key interleave))
 
 ;; TODO should accept the BAM and update the bam properly
 ;; TODO need to properly support file contents larger than 254 bytes aka interleaving several sectors properly
@@ -246,3 +248,5 @@
   (with-open-file (new-d64-image disk-image-name :direction :output :element-type 'unsigned-byte :if-does-not-exist :create)
     (write-sequence disk-contents new-d64-image)))
 
+
+;; TODO prior to writing a prg to the disk need to ensure first two bytes is either the next sector continuing the rest of the file's contents or 00 followed how much of the sector is used (remaining bytes i think)
