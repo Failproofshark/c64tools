@@ -1,4 +1,4 @@
-+;;TODO FEATURE: perhaps expand this to possibly edit d64 files/act as a d64 file manager
+;;TODO FEATURE: perhaps expand this to possibly edit d64 files/act as a d64 file manager
 (defconstant *standard-disk-size*
   174848
   "The standard size of a d64 file according to http://unusedino.de/ec64/technical/formats/d64.html")
@@ -249,4 +249,4 @@
     (write-sequence disk-contents new-d64-image)))
 
 
-;; TODO prior to writing a prg to the disk need to ensure first two bytes is either the next sector continuing the rest of the file's contents or 00 followed how much of the sector is used (remaining bytes i think)
+;; TODO prior to writing a prg to the disk need to ensure first two bytes is either the next sector continuing the rest of the file's contents or 00 followed how much of the sector is used (remaining bytes i think) (from the example its looks like it's supposed simply be the remaining length of the file
