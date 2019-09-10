@@ -1,3 +1,8 @@
+(in-package :cl-user)
+(defpackage :d64-tools
+  (:use :cl))
+(in-package :d64-tools)
+
 ;;TODO FEATURE: perhaps expand this to possibly edit d64 files/act as a d64 file manager
 (defconstant *standard-disk-size*
   174848
@@ -214,12 +219,21 @@
 
 ;; TODO should accept the BAM and update the bam properly
 ;; TODO need to properly support file contents larger than 254 bytes aka interleaving several sectors properly
+;; TODO write procedure skip first two bytes. If we hit 256 write the first two bytes to be the next track sector otherwise 00 number of bytes remaining
+;; TODO we'll need to determine if we need to move to the next track due to no more remaining sectors in the track
+;; TODO NOTE technically we only need to keep track of the current track and sector that way when it comes to write the next track and sector of our next block or book ending remainder of bytes simply need to seek-to-track-sector then set that byte and the one following
+;; TODO need to error out if there are no available blocks (have to check against the BAM
 (defun write-file-to-disk (start-track start-sector disk content-file)
   (with-open-file (contents content-file :direction :input :element-type 'unsigned-byte)
-    (loop with byte-offset = (seek-to-track-sector start-track start-sector)
-          for byte = (read-byte contents 'nil 'nil) while byte do
-            (setf (aref disk byte-offset) byte)
-            (incf byte-offset))))
+    (let ((byte-count 2))
+      (loop with byte-offset = (seek-to-track-sector start-track start-sector)
+            for byte = (read-byte contents 'nil 'nil) while byte do
+              (incf byte-count)
+              (setf (aref disk byte-offset) byte)
+              (incf byte-offset))
+       ;; We need to write our book ender bytes
+      (setf (aref disk (seek-to-track-sector start-track start-sector) 0))
+      (setf (aref disk (+ 1 (seek-to-track-sector start-track start-sector) byte-count))))))
 
 ;; TODO should also accept the BAM to determine if the directory entry has
 (defun write-directory-entry (disk directory-entries)
@@ -249,4 +263,4 @@
     (write-sequence disk-contents new-d64-image)))
 
 
-;; TODO prior to writing a prg to the disk need to ensure first two bytes is either the next sector continuing the rest of the file's contents or 00 followed how much of the sector is used (remaining bytes i think) (from the example its looks like it's supposed simply be the remaining length of the file
+;; TODO prior to writing a prg to the disk need to ensure first two bytes is either the next sector continuing the rest of the file's contents or 00 followed how much of the sector is used (remaining bytes i think)
