@@ -1,24 +1,28 @@
 (in-package :cl-user)
-(defpackage :d64-tools
-  (:use :cl))
-(in-package :d64-tools)
+(defpackage :d64
+  (:use :cl
+        :cl-ppcre)
+  (:export :initialize-bam
+           :create-directory-entry
+           :update-bam-entry
+           :compile-disk))
+(in-package :d64)
 
 ;;TODO FEATURE: perhaps expand this to possibly edit d64 files/act as a d64 file manager
-(defconstant *standard-disk-size*
+(defconstant +standard-disk-size+
   174848
   "The standard size of a d64 file according to http://unusedino.de/ec64/technical/formats/d64.html")
-(defconstant *total-tracks-in-standard-disk*
+(defconstant +total-tracks-in-standard-disk+
   35
   "The standard number of tracks of a d64 formatted disk according to http://unusedino.de/ec64/technical/formats/d64.html")
-(defconstant *sector-size-in-bytes* 
+(defconstant +sector-size-in-bytes+ 
   256
   "Number of bytes in a sector according to http://unusedino.de/ec64/technical/formats/d64.html")
 
 ;; TODO determine if this still needs to be a table or simply a function 
-(defun generate-sectors-per-track-table ()
-  "Creates a vector representing a table listing the number of sectors available in it's track"
-  (let ((new-track-per-sector-table (make-array *total-tracks-in-standard-disk* :element-type 'unsigned-byte)))
-    (dotimes (track *total-tracks-in-standard-disk*)
+(defvar +sectors-per-track-table+
+  (let ((new-track-per-sector-table (make-array +total-tracks-in-standard-disk+ :element-type 'unsigned-byte)))
+    (dotimes (track +total-tracks-in-standard-disk+)
       (cond ((and (>= track 0)
                   (<= track 16))
              (setf (aref new-track-per-sector-table track) 21))
@@ -31,15 +35,46 @@
             ((and (>= track 30)
                   (<= track 34))
              (setf (aref new-track-per-sector-table track) 17))))
-    new-track-per-sector-table))
-
-(defconstant *sectors-per-track-table*
-  (generate-sectors-per-track-table)
+    new-track-per-sector-table)  
   "The standard number of tracks per sector according to http://unusedino.de/ec64/technical/formats/d64.html")
 
-;; TODO perhaps use a hashmap to make editing entries easier? Could use a reduce to extract the associated byte information when it comes time to write
-(defvar *directory-entries* 'nil
-  "A list of arrays representing the directory entries")
+(defstruct (disk (:constructor make-disk (disk-name)))
+  "A struct that represents a disk image. BAM is represented as an array of unsigned-bytes. Directories are a list of unsigned-byte arrays. The contents is a hashmap of d64-files keyed by their on-disk file name"
+  (disk-name "" :type string)
+  (bam (initialize-bam disk-name) :type vector)
+  ;;This is a list of unsigned-byte arrays. Used a list of arrays instead of a giant byte array to better support other disk types later. However I will probably switch to a giant array in the future and create functions to help manipulate array directories
+  (files (make-hash-table :test equal) :type hash-table))
+
+(defstruct d64-file 
+  "A struct that represents a file on a d64-formatted-disk."
+  (file-name :: :type string)
+  (file-size 0 :type integer)
+  ;; Should probably be a symbol
+  (file-type "" :type string)
+  ;; We should pre-chunk this for easier writing later
+  (contents 'nil :type vector)
+  (start-track 0 :type integer)
+  (start-sector 0 :type integer)
+  (directory-entry-number 0 :type integer)
+  (directory-entry 'nil :type vector))
+
+;; TODO by default take first 16 characters of file-name for the entry-name
+;; TODO allow for raw-content (perhaps make path-to-file and raw-content be key arguments
+(defun create-new-d64-file (file-type path-to-file entry-name start-track start-sector)
+  (let ((new-d64-file (make-d64-file :file-name entry-name
+                                     :file-type file-type
+                                     ;; These two should be supplied based on availability according to the BAM
+                                     :start-track start-track
+                                     :start-sector start-sector))
+        (collected-contents 'nil)
+        ;; What does fill-pointer do again?
+        (content-array (make-array 256 :element-type 'unsigned-byte))
+        (file-length 0))
+    (with-open-file (data path-to-file :element-type 'unsigned-byte)
+      (loop byte = (read-byte data 'nil 'nil) while byte do
+            ()))))
+
+;; TODO write a function that reads a disk into a disk struct
 
 ;; TODO we need a function that records item to the BAM
 ;; TODO we need a function that records directory entries
@@ -48,14 +83,14 @@
   (labels ((check-if-valid-track-sector-p (track sector)
              (and (> track 0)
                   (>= sector 0) 
-                  (< sector (aref *sectors-per-track-table* (- track 1)))))
+                  (< sector (aref +sectors-per-track-table+ (- track 1)))))
            (number-of-sectors-in (track sector)
              (if (> track 1)                 
-                 (+ (reduce #'+ (subseq *sectors-per-track-table* 0 (- track 1))) sector)
+                 (+ (reduce #'+ (subseq +sectors-per-track-table+ 0 (- track 1))) sector)
                  sector)))
     ;; TODO raise condition otherwise
     (if (check-if-valid-track-sector-p track sector)
-        (* *sector-size-in-bytes* (number-of-sectors-in track sector)))))
+        (* +sector-size-in-bytes+ (number-of-sectors-in track sector)))))
 
 ;; TODO expand this to actually accomodate this for non PRG files
 ;; TODO Accomodate placing files on other tracks and consider the bam for locating sector to place file
@@ -96,7 +131,7 @@
       ;; We should signal an error if the file name is longer than the maximum 16 characters or the filename is not a string
       ))
 
-;; TODO verify if this actually worked out alright (i.e. compare it to the specification)
+;; TODO we need a bam calculator to calculate the BAM entries
 (defun initialize-bam (disk-name)
   (if (<= (length (string-trim '(#\Space #\tab #\Newline) disk-name)) 16)
       (let ((new-bam (make-array 256 :element-type 'unsigned-byte :initial-element #x0))
@@ -203,19 +238,24 @@
 ;; mainly used for debugging
 ;; TODO should try to generalize this one day to generate fixed sized byte table readings
 ;; TODO just replace array-slice with subseq
-(defun pretty-print-bam-contents (bam)
+(defun pretty-print-bam-contents (disk)
   (labels ((array-slice (array-to-slice start-index last-index)
              (loop for item from start-index to last-index collect (aref array-to-slice item))))
     (format t "   ~{0~x ~}~%" (loop for i from 0 to 15 collect i))
     (loop for i from 0 to 255 by 16
           for row-counter from 0 to 15 do
-            (format t "~x0 ~{~2,'0x ~}~%" row-counter (array-slice bam i (+ 15 i))))))
+            (format t "~x0 ~{~2,'0x ~}~%" row-counter (array-slice (disk-bam disk) i (+ 15 i))))))
 
+;; TODO rename this to create-new-disk
 (defun initialize-disk ()
-  (make-array *standard-disk-size* :element-type 'unsigned-byte :initial-element #x0))
+  (make-array +standard-disk-size+ :element-type 'unsigned-byte :initial-element #x0))
+
+(defun write-to-disk (disk-byte-array track sector interleave content)
+  (let ((start-offset (seek-to-track-sector track sector)))
+    (loop for index from 0 upto (- (length content) 1) do
+          (setf (aref disk-byte-array (+ start-offset index)) (aref content index)))))
 
 ;; TODO determine number of bytes and divide it among track/sectors as evenly as possible interleaving sectors of 10 (implementation note will need to check if at last sector of track if so need to move to next).
- (defun write-to-disk (track sector disk data-to-write &key interleave))
 
 ;; TODO should accept the BAM and update the bam properly
 ;; TODO need to properly support file contents larger than 254 bytes aka interleaving several sectors properly
@@ -225,15 +265,15 @@
 ;; TODO need to error out if there are no available blocks (have to check against the BAM
 (defun write-file-to-disk (start-track start-sector disk content-file)
   (with-open-file (contents content-file :direction :input :element-type 'unsigned-byte)
-    (let ((byte-count 2))
+    (let ((byte-count 0))
       (loop with byte-offset = (seek-to-track-sector start-track start-sector)
             for byte = (read-byte contents 'nil 'nil) while byte do
               (incf byte-count)
               (setf (aref disk byte-offset) byte)
               (incf byte-offset))
        ;; We need to write our book ender bytes
-      (setf (aref disk (seek-to-track-sector start-track start-sector) 0))
-      (setf (aref disk (+ 1 (seek-to-track-sector start-track start-sector) byte-count))))))
+      (setf (aref disk (seek-to-track-sector start-track start-sector)) 0)
+      (setf (aref disk (+ 1 (seek-to-track-sector start-track start-sector))) byte-count))))
 
 ;; TODO should also accept the BAM to determine if the directory entry has
 (defun write-directory-entry (disk directory-entries)
@@ -246,21 +286,21 @@
                   for byte-index from 0 to (- bytes-per-entry 1) do
                     (setf (aref disk (+ disk-byte-index byte-index)) byte)))))
 
-(defun write-bam (disk bam)
+(defun write-bam (disk-byte-array bam)
   (let ((bam-track-sector-start (seek-to-track-sector 18 0)))
     (loop for byte across bam
           for disk-index from 0 to (- (length bam) 1) do
-            (setf (aref disk (+ bam-track-sector-start disk-index)) byte))))
+            (setf (aref disk-byte-array (+ bam-track-sector-start disk-index)) byte))))
 
-(defun compile-disk (disk-name disk directories bam)
+(defun create-d64-image (disk)
+  (let ((new-disk (make-array +standard-disk-size+ :element-type 'unsigned-byte :initial-element #x0)))
+    (write-bam new-disk (disk-bam disk))
+    (loop for file-name being the hash-key of (disk-files disk) do
+      (write-)))
   (write-directory-entry disk *directory-entries*)
   (write-bam disk bam)
   (save-disk-image disk-name disk))
 
 ;; TODO have this accept: a series of directory entries and write them accordingly,
-(defun save-disk-image (disk-image-name disk-contents)
-  (with-open-file (new-d64-image disk-image-name :direction :output :element-type 'unsigned-byte :if-does-not-exist :create)
-    (write-sequence disk-contents new-d64-image)))
-
 
 ;; TODO prior to writing a prg to the disk need to ensure first two bytes is either the next sector continuing the rest of the file's contents or 00 followed how much of the sector is used (remaining bytes i think)
